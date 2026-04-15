@@ -12,7 +12,13 @@ const goalsRoutes = require('./routes/goals');
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-app.use(cors({ origin: 'http://localhost:5173' }));
+app.use(cors({ 
+  origin: [
+    'http://localhost:5173',
+    'http://localhost:3000',
+    process.env.FRONTEND_URL
+  ].filter(Boolean)
+}));
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -22,19 +28,34 @@ app.use('/api/goals', goalsRoutes);
 
 app.get('/api/summary/:year/:month', async (req, res) => {
   const { year, month } = req.params;
-  const start = `${year}-${String(month).padStart(2, '0')}-01`;
-  const end = `${year}-${String(month).padStart(2, '0')}-31`;
+  const monthStr = String(month).padStart(2, '0');
+  const startDate = `${year}-${monthStr}-01`;
+  const endDate = `${year}-${monthStr}-31`;
 
   try {
-    const [row] = await db('transactions')
-      .select(
-        db.raw("SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) AS total_income"),
-        db.raw("SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) AS total_expense")
-      )
-      .whereBetween('date', [start, end]);
+    const incomeSnapshot = await db.collection('transactions')
+      .where('type', '==', 'income')
+      .where('date', '>=', startDate)
+      .where('date', '<=', endDate)
+      .get();
 
-    const totalIncome = row.total_income || 0;
-    const totalExpense = row.total_expense || 0;
+    const expenseSnapshot = await db.collection('transactions')
+      .where('type', '==', 'expense')
+      .where('date', '>=', startDate)
+      .where('date', '<=', endDate)
+      .get();
+
+    let totalIncome = 0;
+    let totalExpense = 0;
+
+    incomeSnapshot.forEach((doc) => {
+      totalIncome += Number(doc.data().amount || 0);
+    });
+
+    expenseSnapshot.forEach((doc) => {
+      totalExpense += Number(doc.data().amount || 0);
+    });
+
     const balance = totalIncome - totalExpense;
 
     res.json({ totalIncome, totalExpense, balance });
@@ -48,13 +69,15 @@ app.use((req, res) => {
 });
 
 const startServer = async () => {
-  await initialize();
-  app.listen(PORT, () => {
-    console.log(`Backend rodando em http://localhost:${PORT}`);
-  });
+  try {
+    await initialize();
+    app.listen(PORT, () => {
+      console.log(`✅ Backend rodando em http://localhost:${PORT}`);
+    });
+  } catch (err) {
+    console.error('Erro ao iniciar o servidor:', err);
+    process.exit(1);
+  }
 };
 
-startServer().catch((err) => {
-  console.error('Erro ao iniciar o servidor:', err);
-  process.exit(1);
-});
+startServer();

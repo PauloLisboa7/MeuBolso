@@ -1,11 +1,20 @@
 const express = require('express');
 const router = express.Router();
-const { db } = require('../db/database');
+const { db, admin } = require('../db/database');
 
 router.get('/', async (req, res) => {
   try {
-    const rows = await db('goals').select('*').orderBy('deadline', 'asc');
-    res.json(rows);
+    const snapshot = await db.collection('goals').orderBy('deadline', 'asc').get();
+    const goals = [];
+
+    snapshot.forEach((doc) => {
+      goals.push({
+        id: doc.id,
+        ...doc.data()
+      });
+    });
+
+    res.json(goals);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -19,15 +28,16 @@ router.post('/', async (req, res) => {
   }
 
   try {
-    const result = await db('goals').insert({
+    const payload = {
       title,
-      target_amount: Number(targetAmount),
-      current_amount: Number(currentAmount) || 0,
-      deadline
-    });
+      targetAmount: Number(targetAmount),
+      currentAmount: Number(currentAmount) || 0,
+      deadline: deadline || null,
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    };
 
-    const id = Array.isArray(result) ? result[0] : result;
-    res.status(201).json({ id, title, targetAmount, currentAmount: Number(currentAmount) || 0, deadline });
+    const docRef = await db.collection('goals').add(payload);
+    res.status(201).json({ id: docRef.id, ...payload });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -38,16 +48,16 @@ router.put('/:id', async (req, res) => {
   const { title, targetAmount, currentAmount, deadline } = req.body;
 
   try {
-    const updated = await db('goals')
-      .where({ id })
-      .update({
-        title,
-        target_amount: Number(targetAmount),
-        current_amount: Number(currentAmount),
-        deadline
-      });
+    const payload = {
+      title,
+      targetAmount: Number(targetAmount),
+      currentAmount: Number(currentAmount),
+      deadline: deadline || null,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
 
-    res.json({ updated });
+    await db.collection('goals').doc(id).update(payload);
+    res.json({ id, ...payload });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -57,8 +67,8 @@ router.delete('/:id', async (req, res) => {
   const { id } = req.params;
 
   try {
-    const deleted = await db('goals').where({ id }).del();
-    res.json({ deleted });
+    await db.collection('goals').doc(id).delete();
+    res.json({ deleted: 1 });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

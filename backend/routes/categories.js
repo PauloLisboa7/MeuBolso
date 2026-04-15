@@ -1,12 +1,21 @@
 const express = require('express');
 const router = express.Router();
-const { db } = require('../db/database');
+const { db, admin } = require('../db/database');
 const VALID_TYPES = ['income', 'expense'];
 
 router.get('/', async (req, res) => {
   try {
-    const rows = await db('categories').select('*').orderBy('name');
-    res.json(rows);
+    const snapshot = await db.collection('categories').orderBy('name').get();
+    const categories = [];
+
+    snapshot.forEach((doc) => {
+      categories.push({
+        id: doc.id,
+        ...doc.data()
+      });
+    });
+
+    res.json(categories);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -24,9 +33,14 @@ router.post('/', async (req, res) => {
   }
 
   try {
-    const result = await db('categories').insert({ name, type });
-    const id = Array.isArray(result) ? result[0] : result;
-    res.status(201).json({ id, name, type });
+    const payload = {
+      name,
+      type,
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    const docRef = await db.collection('categories').add(payload);
+    res.status(201).json({ id: docRef.id, ...payload });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -41,8 +55,14 @@ router.put('/:id', async (req, res) => {
   }
 
   try {
-    const updated = await db('categories').where({ id }).update({ name, type });
-    res.json({ updated });
+    const payload = {
+      name,
+      type,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    await db.collection('categories').doc(id).update(payload);
+    res.json({ id, ...payload });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -52,8 +72,8 @@ router.delete('/:id', async (req, res) => {
   const { id } = req.params;
 
   try {
-    const deleted = await db('categories').where({ id }).del();
-    res.json({ deleted });
+    await db.collection('categories').doc(id).delete();
+    res.json({ deleted: 1 });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

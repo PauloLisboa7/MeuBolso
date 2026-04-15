@@ -1,66 +1,51 @@
 require('dotenv').config();
-const path = require('path');
-const knex = require('knex');
+const admin = require('firebase-admin');
 
-const dbClient = process.env.DB_CLIENT || 'sqlite3';
-const connection = process.env.DATABASE_URL ||
-  (dbClient === 'sqlite3'
-    ? { filename: path.resolve(__dirname, 'finance.db') }
-    : {
-        host: process.env.DB_HOST || 'localhost',
-        port: process.env.DB_PORT || (dbClient === 'pg' ? 5432 : 3306),
-        user: process.env.DB_USER || 'root',
-        password: process.env.DB_PASSWORD || '',
-        database: process.env.DB_NAME || 'meubolso'
-      });
+// Initialize Firebase Admin with environment variables
+const serviceAccount = {
+  type: process.env.FIREBASE_TYPE || 'service_account',
+  project_id: process.env.FIREBASE_PROJECT_ID || 'meubolso-9cfcc',
+  private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
+  private_key: process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') : undefined,
+  client_email: process.env.FIREBASE_CLIENT_EMAIL,
+  client_id: process.env.FIREBASE_CLIENT_ID,
+  auth_uri: process.env.FIREBASE_AUTH_URI || 'https://accounts.google.com/o/oauth2/auth',
+  token_uri: process.env.FIREBASE_TOKEN_URI || 'https://oauth2.googleapis.com/token',
+  auth_provider_x509_cert_url: process.env.FIREBASE_AUTH_PROVIDER_CERT_URL || 'https://www.googleapis.com/oauth2/v1/certs',
+  client_x509_cert_url: process.env.FIREBASE_CLIENT_CERT_URL
+};
 
-const db = knex({
-  client: dbClient,
-  connection,
-  useNullAsDefault: dbClient === 'sqlite3'
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+  projectId: process.env.FIREBASE_PROJECT_ID || 'meubolso-9cfcc'
 });
 
+const db = admin.firestore();
+
 async function initialize() {
-  if (!(await db.schema.hasTable('categories'))) {
-    await db.schema.createTable('categories', (table) => {
-      table.increments('id').primary();
-      table.string('name').notNullable();
-      table.string('type').notNullable();
-    });
-  }
+  try {
+    // Check if default categories exist
+    const categoriesSnap = await db.collection('categories').limit(1).get();
+    
+    if (categoriesSnap.empty) {
+      // Create default categories
+      const defaultCategories = [
+        { name: 'Alimentação', type: 'expense', createdAt: admin.firestore.FieldValue.serverTimestamp() },
+        { name: 'Transporte', type: 'expense', createdAt: admin.firestore.FieldValue.serverTimestamp() },
+        { name: 'Lazer', type: 'expense', createdAt: admin.firestore.FieldValue.serverTimestamp() },
+        { name: 'Salário', type: 'income', createdAt: admin.firestore.FieldValue.serverTimestamp() },
+        { name: 'Outros', type: 'income', createdAt: admin.firestore.FieldValue.serverTimestamp() }
+      ];
 
-  if (!(await db.schema.hasTable('transactions'))) {
-    await db.schema.createTable('transactions', (table) => {
-      table.increments('id').primary();
-      table.string('type').notNullable();
-      table.decimal('amount', 14, 2).notNullable();
-      table.integer('category_id').unsigned().references('id').inTable('categories').onDelete('SET NULL');
-      table.date('date').notNullable();
-      table.text('description');
-    });
-  }
-
-  if (!(await db.schema.hasTable('goals'))) {
-    await db.schema.createTable('goals', (table) => {
-      table.increments('id').primary();
-      table.string('title').notNullable();
-      table.decimal('target_amount', 14, 2).notNullable();
-      table.decimal('current_amount', 14, 2).notNullable().defaultTo(0);
-      table.date('deadline');
-      table.timestamp('created_at').defaultTo(db.fn.now());
-    });
-  }
-
-  const count = await db('categories').count({ count: 'id' }).first();
-  if (Number(count.count) === 0) {
-    await db('categories').insert([
-      { name: 'Alimentação', type: 'expense' },
-      { name: 'Transporte', type: 'expense' },
-      { name: 'Lazer', type: 'expense' },
-      { name: 'Salário', type: 'income' },
-      { name: 'Outros', type: 'income' }
-    ]);
+      for (const category of defaultCategories) {
+        await db.collection('categories').add(category);
+      }
+      console.log('✅ Default categories created');
+    }
+  } catch (error) {
+    console.error('Error initializing Firebase:', error);
+    throw error;
   }
 }
 
-module.exports = { db, initialize };
+module.exports = { db, admin, initialize };

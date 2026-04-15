@@ -1,25 +1,38 @@
 const express = require('express');
 const router = express.Router();
-const { db } = require('../db/database');
+const { db, admin } = require('../db/database');
 
 const VALID_TYPES = ['income', 'expense'];
 
 router.get('/', async (req, res) => {
   try {
-    const rows = await db('transactions as t')
-      .select(
-        't.id',
-        't.type',
-        't.amount',
-        't.date',
-        't.description',
-        'c.name as category_name',
-        'c.type as category_type'
-      )
-      .leftJoin('categories as c', 't.category_id', 'c.id')
-      .orderBy('t.date', 'desc');
+    const snapshot = await db.collection('transactions').orderBy('date', 'desc').get();
+    const transactions = [];
 
-    res.json(rows);
+    for (const doc of snapshot.docs) {
+      const data = doc.data();
+      let categoryData = null;
+
+      if (data.categoryId) {
+        const catSnap = await db.collection('categories').doc(data.categoryId).get();
+        if (catSnap.exists) {
+          categoryData = catSnap.data();
+        }
+      }
+
+      transactions.push({
+        id: doc.id,
+        type: data.type,
+        amount: Number(data.amount),
+        date: data.date,
+        description: data.description,
+        categoryId: data.categoryId,
+        category_name: categoryData?.name || null,
+        category_type: categoryData?.type || null
+      });
+    }
+
+    res.json(transactions);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -27,25 +40,42 @@ router.get('/', async (req, res) => {
 
 router.get('/monthly/:year/:month', async (req, res) => {
   const { year, month } = req.params;
-  const start = `${year}-${String(month).padStart(2, '0')}-01`;
-  const end = `${year}-${String(month).padStart(2, '0')}-31`;
+  const monthStr = String(month).padStart(2, '0');
+  const startDate = `${year}-${monthStr}-01`;
+  const endDate = `${year}-${monthStr}-31`;
 
   try {
-    const rows = await db('transactions as t')
-      .select(
-        't.id',
-        't.type',
-        't.amount',
-        't.date',
-        't.description',
-        'c.name as category_name',
-        'c.type as category_type'
-      )
-      .leftJoin('categories as c', 't.category_id', 'c.id')
-      .whereBetween('t.date', [start, end])
-      .orderBy('t.date', 'desc');
+    const snapshot = await db.collection('transactions')
+      .where('date', '>=', startDate)
+      .where('date', '<=', endDate)
+      .orderBy('date', 'desc')
+      .get();
 
-    res.json(rows);
+    const transactions = [];
+    for (const doc of snapshot.docs) {
+      const data = doc.data();
+      let categoryData = null;
+
+      if (data.categoryId) {
+        const catSnap = await db.collection('categories').doc(data.categoryId).get();
+        if (catSnap.exists) {
+          categoryData = catSnap.data();
+        }
+      }
+
+      transactions.push({
+        id: doc.id,
+        type: data.type,
+        amount: Number(data.amount),
+        date: data.date,
+        description: data.description,
+        categoryId: data.categoryId,
+        category_name: categoryData?.name || null,
+        category_type: categoryData?.type || null
+      });
+    }
+
+    res.json(transactions);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -63,21 +93,18 @@ router.post('/', async (req, res) => {
   }
 
   try {
-    const insertQuery = db('transactions');
     const payload = {
       type,
       amount: Number(amount),
-      category_id: categoryId || null,
-      date,
-      description
+      categoryId: categoryId || null,
+      date: date || new Date().toISOString().split('T')[0],
+      description: description || '',
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
     };
 
-    const result = db.client.config.client === 'pg'
-      ? await insertQuery.returning('id').insert(payload)
-      : await insertQuery.insert(payload);
+    const docRef = await db.collection('transactions').add(payload);
 
-    const id = Array.isArray(result) ? result[0] : result;
-    res.status(201).json({ id, type, amount, categoryId, date, description });
+    res.status(201).json({ id: docRef.id, ...payload });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -92,17 +119,18 @@ router.put('/:id', async (req, res) => {
   }
 
   try {
-    const changes = await db('transactions')
-      .where({ id })
-      .update({
-        type,
-        amount: Number(amount),
-        category_id: categoryId || null,
-        date,
-        description
-      });
+    const payload = {
+      type,
+      amount: Number(amount),
+      categoryId: categoryId || null,
+      date,
+      description,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
 
-    res.json({ updated: changes });
+    await db.collection('transactions').doc(id).update(payload);
+
+    res.json({ id, ...payload });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -112,8 +140,8 @@ router.delete('/:id', async (req, res) => {
   const { id } = req.params;
 
   try {
-    const deleted = await db('transactions').where({ id }).del();
-    res.json({ deleted });
+    await db.collection('transactions').doc(id).delete();
+    res.json({ deleted: 1 });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
